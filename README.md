@@ -128,8 +128,7 @@ Token 范围使用 `[min-]max[:avg]` 格式指定：
 #### 生成 Bench 格式数据集
 
 ```bash
-cargo run --release -- \
-  -i demo/input_0.txt \
+data-generator -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f bench \
   -o output_bench_16k.jsonl \
@@ -139,8 +138,7 @@ cargo run --release -- \
 ```
 
 ```bash
-cargo run --release -- \
-  -i demo/input_0.txt \
+data-generator -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f bench \
   -o output_bench_32k.jsonl \
@@ -150,8 +148,7 @@ cargo run --release -- \
 ```
 
 ```bash
-cargo run --release -- \
-  -i demo/input_0.txt \
+data-generator -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f bench \
   -o output_bench_128k.jsonl \
@@ -163,8 +160,7 @@ cargo run --release -- \
 #### 生成 AIAK 格式数据集
 
 ```bash
-cargo run --release -- \
-  -i demo/input_0.txt \
+data-generator -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f aiak \
   -o output_aiak_16k.json \
@@ -174,8 +170,7 @@ cargo run --release -- \
 ```
 
 ```bash
-cargo run --release -- \
-  -i demo/input_0.txt \
+data-generator -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f aiak \
   -o output_aiak_32k.json \
@@ -185,8 +180,7 @@ cargo run --release -- \
 ```
 
 ```bash
-cargo run --release -- \
-  -i demo/input_0.txt \
+data-generator -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f aiak \
   -o output_aiak_128k.json \
@@ -198,8 +192,7 @@ cargo run --release -- \
 #### 仅指定 max Token 数
 
 ```bash
-cargo run -- \
-  -i demo/input_0.txt \
+data-generator -i demo/input_0.txt \
   -f bench \
   -o output.jsonl \
   -t demo/tokenizer.json \
