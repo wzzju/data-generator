@@ -87,7 +87,10 @@ pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<Vec<String>> {
 pub fn load_tokenizer(path: impl AsRef<Path>) -> Result<Tokenizer> {
 	let path = path.as_ref();
 	if !path.exists() {
-		return Err(Error::custom(format!("Tokenizer file not found: {}", path.display())));
+		return Err(Error::custom(format!(
+			"Tokenizer file not found: {}",
+			path.display()
+		)));
 	}
 	Ok(Tokenizer::from_file(path)?)
 }
@@ -185,16 +188,25 @@ fn extract_text_with_tokens(
 
 	for _ in 0..100 {
 		let max_start = corpus_len.saturating_sub(estimated_chars);
-		let raw_start = if max_start > 0 { rng.random_range(0..max_start) } else { 0 };
+		let raw_start = if max_start > 0 {
+			rng.random_range(0..max_start)
+		} else {
+			0
+		};
 
 		let start = snap_to_sentence_start(&corpus_chars, raw_start);
 		if start >= corpus_len {
 			continue;
 		}
 
-		if let Some((text, _)) =
-			extract_exact_tokens(&corpus_chars, start, tokenizer, target_tokens, min_tokens, max_tokens)?
-		{
+		if let Some((text, _)) = extract_exact_tokens(
+			&corpus_chars,
+			start,
+			tokenizer,
+			target_tokens,
+			min_tokens,
+			max_tokens,
+		)? {
 			return Ok(text);
 		}
 	}
@@ -252,7 +264,9 @@ fn extract_text_pair(
 			max_tokens,
 		)?;
 
-		let Some((h_text, h_char_len)) = human_text else { continue };
+		let Some((h_text, h_char_len)) = human_text else {
+			continue;
+		};
 
 		// -- Extract gpt text from right after human text
 		let gpt_start = start + h_char_len;
@@ -261,7 +275,10 @@ fn extract_text_pair(
 		}
 
 		let gpt_text = extract_exact_tokens(
-			&corpus_chars, gpt_start, tokenizer, gpt_tokens,
+			&corpus_chars,
+			gpt_start,
+			tokenizer,
+			gpt_tokens,
 			1, // gpt has no strict min requirement per turn
 			max_tokens,
 		)?;
@@ -387,7 +404,13 @@ pub fn generate_aiak(config: &GeneratorConfig, output: impl AsRef<Path>) -> Resu
 		let total_target = generate_target_tokens(config.token_range);
 
 		// -- Decide number of conversation rounds (1-3 pairs)
-		let max_rounds = if total_target >= 100 { 3 } else if total_target >= 40 { 2 } else { 1 };
+		let max_rounds = if total_target >= 100 {
+			3
+		} else if total_target >= 40 {
+			2
+		} else {
+			1
+		};
 		let num_rounds: usize = rng.random_range(1..=max_rounds);
 
 		// -- Distribute tokens across rounds
@@ -426,10 +449,7 @@ pub fn generate_aiak(config: &GeneratorConfig, output: impl AsRef<Path>) -> Resu
 			&& actual_total_tokens <= config.token_range.max
 		{
 			let id = generate_id();
-			AiakEntry {
-				id,
-				conversations,
-			}
+			AiakEntry { id, conversations }
 		} else {
 			// -- Retry with single round for simpler control
 			let (human_text, gpt_text) = extract_text_pair(
@@ -477,7 +497,9 @@ fn generate_target_tokens(range: &TokenRange) -> usize {
 
 	// -- Scale: stddev ≈ (max - min) / 6 keeps most values in range
 	let stddev = (range.max as f64 - range.min as f64) / 6.0;
-	let value = (range.avg as f64 + normal * stddev).round().clamp(range.min as f64, range.max as f64);
+	let value = (range.avg as f64 + normal * stddev)
+		.round()
+		.clamp(range.min as f64, range.max as f64);
 
 	value as usize
 }
@@ -491,14 +513,16 @@ fn distribute_tokens(total: usize, rounds: usize) -> Vec<usize> {
 
 	let mut rng = rand::rng();
 	let base = total / rounds;
-	let mut result: Vec<usize> = (0..rounds).map(|_| {
-		let variation = rng.random_range(0..=(base / 4).max(1));
-		if rng.random_bool(0.5) {
-			base + variation
-		} else {
-			base.saturating_sub(variation)
-		}
-	}).collect();
+	let mut result: Vec<usize> = (0..rounds)
+		.map(|_| {
+			let variation = rng.random_range(0..=(base / 4).max(1));
+			if rng.random_bool(0.5) {
+				base + variation
+			} else {
+				base.saturating_sub(variation)
+			}
+		})
+		.collect();
 
 	// -- Adjust the last element to ensure the sum equals total
 	let current_sum: usize = result.iter().sum();

@@ -36,7 +36,6 @@ pub enum Error {
 	InvalidTokenRange(String),
 
 	// -- Externals
-
 	/// Wraps I/O errors from `std::io`.
 	#[display("io error: {}", _0)]
 	#[from]

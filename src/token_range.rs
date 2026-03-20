@@ -70,9 +70,8 @@ impl TokenRange {
 // region:    --- Support
 
 fn parse_usize(s: &str, field_name: &str) -> Result<usize> {
-	s.parse::<usize>().map_err(|_| {
-		Error::InvalidTokenRange(format!("Invalid {field_name} value: '{s}'"))
-	})
+	s.parse::<usize>()
+		.map_err(|_| Error::InvalidTokenRange(format!("Invalid {field_name} value: '{s}'")))
 }
 
 // endregion: --- Support

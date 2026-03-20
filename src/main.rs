@@ -29,10 +29,7 @@ fn main() -> Result<()> {
 	let tokenizer = generator::load_tokenizer(&cli.tokenizer)?;
 
 	// -- Load corpus
-	println!(
-		"Loading corpus from {} file(s)...",
-		cli.input.len()
-	);
+	println!("Loading corpus from {} file(s)...", cli.input.len());
 	let corpus_files = generator::load_corpus(&cli.input)?;
 	let total_chars: usize = corpus_files.iter().map(|c| c.len()).sum();
 	println!(
