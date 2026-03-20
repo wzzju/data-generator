@@ -1,7 +1,8 @@
 use crate::error::{Error, Result};
 use crate::token_range::TokenRange;
 
-use rand::Rng;
+// use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufWriter, Write};
@@ -518,7 +519,7 @@ fn generate_target_tokens(range: &TokenRange) -> usize {
 	// -- Use Box-Muller transform for approximate normal distribution
 	let u1: f64 = rng.random_range(0.0001f64..1.0);
 	let u2: f64 = rng.random_range(0.0001f64..1.0);
-	let normal = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+let normal = (-2.0_f64 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
 
 	// -- Scale: stddev is roughly (max - min) / 6 to keep most values in range
 	let stddev = (range.max as f64 - range.min as f64) / 6.0;
