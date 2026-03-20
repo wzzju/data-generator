@@ -1,7 +1,6 @@
 use crate::error::{Error, Result};
 use crate::token_range::TokenRange;
 
-// use rand::Rng;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -43,17 +42,6 @@ pub struct GeneratorConfig<'a> {
 // endregion: --- Types
 
 // region:    --- Corpus Loading
-
-// Old: Load and concatenate all input text files into a single corpus string.
-// pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<String> {
-//     let mut corpus = String::new();
-//     for path in paths {
-//         let content = fs::read_to_string(path)?;
-//         if !corpus.is_empty() { corpus.push('\n'); }
-//         corpus.push_str(&content);
-//     }
-//     Ok(corpus)
-// }
 
 /// Load all input text files into a vector of strings (one per file).
 ///

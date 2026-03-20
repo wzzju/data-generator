@@ -57,9 +57,6 @@ pub enum Error {
 
 // region:    --- Error Boilerplate
 
-// Old boilerplate (replaced by `derive_more::Error` derive):
-// impl std::error::Error for Error {}
-
 impl Error {
 	/// Creates a `Custom` error from any type that implements `std::error::Error`.
 	///
