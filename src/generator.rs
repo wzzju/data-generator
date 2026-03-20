@@ -33,7 +33,8 @@ pub struct BenchEntry {
 
 /// Configuration for the dataset generator.
 pub struct GeneratorConfig<'a> {
-	pub corpus: &'a str,
+	/// Each element is the full text content of one input file.
+	pub corpus_files: &'a [String],
 	pub tokenizer: &'a Tokenizer,
 	pub token_range: &'a TokenRange,
 	pub count: usize,
@@ -43,9 +44,23 @@ pub struct GeneratorConfig<'a> {
 
 // region:    --- Corpus Loading
 
-/// Load and concatenate all input text files into a single corpus string.
-pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<String> {
-	let mut corpus = String::new();
+// Old: Load and concatenate all input text files into a single corpus string.
+// pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<String> {
+//     let mut corpus = String::new();
+//     for path in paths {
+//         let content = fs::read_to_string(path)?;
+//         if !corpus.is_empty() { corpus.push('\n'); }
+//         corpus.push_str(&content);
+//     }
+//     Ok(corpus)
+// }
+
+/// Load all input text files into a vector of strings (one per file).
+///
+/// Each file is kept as a separate corpus entry so that during generation
+/// we can randomly pick one file per data entry.
+pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<Vec<String>> {
+	let mut corpus_files: Vec<String> = Vec::with_capacity(paths.len());
 
 	for path in paths {
 		let path = path.as_ref();
@@ -56,17 +71,18 @@ pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<String> {
 			)));
 		}
 		let content = fs::read_to_string(path)?;
-		if !corpus.is_empty() {
-			corpus.push('\n');
+		if content.trim().is_empty() {
+			eprintln!("Warning: input file is empty, skipping: {}", path.display());
+			continue;
 		}
-		corpus.push_str(&content);
+		corpus_files.push(content);
 	}
 
-	if corpus.trim().is_empty() {
+	if corpus_files.is_empty() {
 		return Err(Error::custom("All input files are empty"));
 	}
 
-	Ok(corpus)
+	Ok(corpus_files)
 }
 
 /// Load a HuggingFace tokenizer from a JSON file.
@@ -381,11 +397,15 @@ fn extract_exact_tokens(
 pub fn generate_bench(config: &GeneratorConfig, output: impl AsRef<Path>) -> Result<()> {
 	let file = fs::File::create(output.as_ref())?;
 	let mut writer = BufWriter::new(file);
+	let mut rng = rand::rng();
 
 	for i in 0..config.count {
+		// -- Randomly pick one file for this entry
+		let corpus = &config.corpus_files[rng.random_range(0..config.corpus_files.len())];
+
 		let target = generate_target_tokens(config.token_range);
 		let text = extract_text_with_tokens(
-			config.corpus,
+			corpus,
 			config.tokenizer,
 			target,
 			config.token_range.min,
@@ -418,6 +438,9 @@ pub fn generate_aiak(config: &GeneratorConfig, output: impl AsRef<Path>) -> Resu
 	let mut rng = rand::rng();
 
 	for _ in 0..config.count {
+		// -- Randomly pick one file for this entry
+		let corpus = &config.corpus_files[rng.random_range(0..config.corpus_files.len())];
+
 		let total_target = generate_target_tokens(config.token_range);
 
 		// -- Decide number of conversation rounds (1-3 pairs)
@@ -439,7 +462,7 @@ pub fn generate_aiak(config: &GeneratorConfig, output: impl AsRef<Path>) -> Resu
 			let human_max = config.token_range.max;
 
 			let (human_text, gpt_text) = extract_text_pair(
-				config.corpus,
+				corpus,
 				config.tokenizer,
 				human_tokens.max(1),
 				gpt_tokens.max(1),
@@ -473,7 +496,7 @@ pub fn generate_aiak(config: &GeneratorConfig, output: impl AsRef<Path>) -> Resu
 		} else {
 			// -- Retry with single round for simpler control
 			let (human_text, gpt_text) = extract_text_pair(
-				config.corpus,
+				corpus,
 				config.tokenizer,
 				(total_target * 6 / 10).max(1),
 				(total_target * 4 / 10).max(1),

@@ -33,8 +33,13 @@ fn main() -> Result<()> {
 		"Loading corpus from {} file(s)...",
 		cli.input.len()
 	);
-	let corpus = generator::load_corpus(&cli.input)?;
-	println!("Corpus loaded: {} characters", corpus.len());
+	let corpus_files = generator::load_corpus(&cli.input)?;
+	let total_chars: usize = corpus_files.iter().map(|c| c.len()).sum();
+	println!(
+		"Corpus loaded: {} file(s), {} characters total",
+		corpus_files.len(),
+		total_chars
+	);
 
 	// -- Print generation info
 	println!(
@@ -44,7 +49,7 @@ fn main() -> Result<()> {
 
 	// -- Build generator config
 	let config = generator::GeneratorConfig {
-		corpus: &corpus,
+		corpus_files: &corpus_files,
 		tokenizer: &tokenizer,
 		token_range: &token_range,
 		count: cli.count,
