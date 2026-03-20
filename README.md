@@ -35,6 +35,36 @@ cargo --version
 
 > **注意**：本项目使用 Rust Edition 2024，请确保 Rust 工具链版本 ≥ 1.85.0。可通过 `rustup update` 更新到最新版本。
 
+## 安装
+
+确保已安装 Rust 编译环境（见上方"环境准备"章节）。克隆仓库并运行：
+
+```bash
+# 使用 Cargo.lock 文件构建项目，确保构建的可重现性
+cargo build --release --locked
+
+# 全局安装二进制文件（如果存在则覆盖），使用锁定文件
+cargo install --path . --force --locked
+```
+
+安装完成后，`data-generator` 将被安装到 `~/.cargo/bin/` 目录下，可在终端直接使用：
+
+```bash
+data-generator --version
+```
+
+> **提示**：请确保 `~/.cargo/bin` 已添加到你的 `PATH` 环境变量中（Rustup 安装时通常会自动配置）。
+
+## 卸载
+
+```bash
+# 列出所有已安装的 cargo 二进制文件
+cargo install --list
+
+# 卸载 data-generator
+cargo uninstall data-generator
+```
+
 ## 编译
 
 ### Debug 编译（用于开发调试）
