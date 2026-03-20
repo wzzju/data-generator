@@ -109,7 +109,11 @@ fn count_tokens(tokenizer: &Tokenizer, text: &str) -> Result<usize> {
 // region:    --- Sentence Boundary
 
 /// Characters that mark the end of a sentence.
-const SENTENCE_TERMINATORS: &[char] = &['。', '！', '？', '!', '?', '.', '\n'];
+const SENTENCE_TERMINATORS: &[char] = &['。', '！', '？', '；', '!', '?', '.', '\n'];
+
+/// Characters that mark a clause boundary (weaker than sentence terminators,
+/// used as a fallback when no sentence terminator is found nearby).
+const CLAUSE_BOUNDARIES: &[char] = &['，', '、', '：', '“', '"', ',', ':'];
 
 /// Snap a start index forward (or backward) to the nearest sentence boundary
 /// so that the extracted text begins at the start of a complete sentence.
@@ -127,16 +131,21 @@ fn snap_to_sentence_start(corpus_chars: &[char], start: usize) -> usize {
 		return start;
 	}
 
-	// -- Find the first non-whitespace position after a terminator
+	// -- Find the first non-whitespace, non-trailing-quote position after a terminator
 	let skip_whitespace_after = |terminator_pos: usize| -> usize {
+		const TRAILING_QUOTES: &[char] =
+			&['\u{201d}', '\u{300d}', '\u{300f}', ')', '\u{ff09}'];
 		let mut pos = terminator_pos + 1;
-		while pos < corpus_chars.len() && corpus_chars[pos].is_whitespace() {
+		while pos < corpus_chars.len()
+			&& (corpus_chars[pos].is_whitespace()
+				|| TRAILING_QUOTES.contains(&corpus_chars[pos]))
+		{
 			pos += 1;
 		}
 		pos.min(corpus_chars.len())
 	};
 
-	const MAX_LOOK: usize = 200;
+	const MAX_LOOK: usize = 500;
 
 	// -- Scan backward for the nearest sentence terminator
 	let search_start = start.saturating_sub(MAX_LOOK);
@@ -147,13 +156,22 @@ fn snap_to_sentence_start(corpus_chars: &[char], start: usize) -> usize {
 		return skip_whitespace_after(search_start + pos);
 	}
 
-	// -- No terminator found, try scanning forward instead
+	// -- No terminator found backward, try scanning forward
 	let search_end = (start + MAX_LOOK).min(corpus_chars.len());
 	if let Some(pos) = corpus_chars[start..search_end]
 		.iter()
 		.position(|c| SENTENCE_TERMINATORS.contains(c))
 	{
 		return skip_whitespace_after(start + pos);
+	}
+
+	// -- Still nothing: fall back to nearest clause boundary (comma, colon, etc.)
+	let clause_start = start.saturating_sub(MAX_LOOK);
+	if let Some(pos) = corpus_chars[clause_start..start]
+		.iter()
+		.rposition(|c| CLAUSE_BOUNDARIES.contains(c))
+	{
+		return skip_whitespace_after(clause_start + pos);
 	}
 
 	// -- Absolute fallback: use original start
@@ -269,6 +287,9 @@ fn extract_text_pair(
 		};
 
 		// -- Extract gpt text from right after human text
+		// NOTE: gpt value starts directly after human text, no sentence snapping needed.
+		// let gpt_raw_start = start + h_char_len;
+		// let gpt_start = snap_to_sentence_start(&corpus_chars, gpt_raw_start);
 		let gpt_start = start + h_char_len;
 		if gpt_start >= corpus_len {
 			continue;
@@ -289,7 +310,13 @@ fn extract_text_pair(
 	}
 
 	// -- Fallback: extract independently
-	let h = extract_text_with_tokens(corpus, tokenizer, human_tokens, min_tokens, max_tokens)?;
+	let h = extract_text_with_tokens(
+		corpus,
+		tokenizer,
+		human_tokens,
+		min_tokens,
+		max_tokens,
+	)?;
 	let g = extract_text_with_tokens(corpus, tokenizer, gpt_tokens, 1, max_tokens)?;
 	Ok((h, g))
 }
@@ -354,14 +381,18 @@ fn extract_exact_tokens(
 // region:    --- Bench Generation
 
 /// Generate a bench-format dataset (JSONL) and write to the output path.
-pub fn generate_bench(config: &GeneratorConfig, output: impl AsRef<Path>) -> Result<()> {
+pub fn generate_bench(
+	config: &GeneratorConfig,
+	output: impl AsRef<Path>,
+) -> Result<()> {
 	let file = fs::File::create(output.as_ref())?;
 	let mut writer = BufWriter::new(file);
 	let mut rng = rand::rng();
 
 	for i in 0..config.count {
 		// -- Randomly pick one file for this entry
-		let corpus = &config.corpus_files[rng.random_range(0..config.corpus_files.len())];
+		let corpus =
+			&config.corpus_files[rng.random_range(0..config.corpus_files.len())];
 
 		let target = generate_target_tokens(config.token_range);
 		let text = extract_text_with_tokens(
@@ -393,13 +424,17 @@ pub fn generate_bench(config: &GeneratorConfig, output: impl AsRef<Path>) -> Res
 /// Each entry has an id and a conversations array with at least one
 /// human-gpt pair. The total tokens across all turns in one entry
 /// must fall within the specified token range.
-pub fn generate_aiak(config: &GeneratorConfig, output: impl AsRef<Path>) -> Result<()> {
+pub fn generate_aiak(
+	config: &GeneratorConfig,
+	output: impl AsRef<Path>,
+) -> Result<()> {
 	let mut entries: Vec<AiakEntry> = Vec::with_capacity(config.count);
 	let mut rng = rand::rng();
 
 	for _ in 0..config.count {
 		// -- Randomly pick one file for this entry
-		let corpus = &config.corpus_files[rng.random_range(0..config.corpus_files.len())];
+		let corpus =
+			&config.corpus_files[rng.random_range(0..config.corpus_files.len())];
 
 		let total_target = generate_target_tokens(config.token_range);
 
@@ -493,7 +528,8 @@ fn generate_target_tokens(range: &TokenRange) -> usize {
 	// -- Box-Muller transform for approximate normal distribution
 	let u1: f64 = rng.random_range(0.0001f64..1.0);
 	let u2: f64 = rng.random_range(0.0001f64..1.0);
-	let normal = (-2.0_f64 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+	let normal =
+		(-2.0_f64 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
 
 	// -- Scale: stddev ≈ (max - min) / 6 keeps most values in range
 	let stddev = (range.max as f64 - range.min as f64) / 6.0;

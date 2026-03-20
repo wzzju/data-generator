@@ -31,7 +31,8 @@ impl TokenRange {
 		};
 
 		// -- Parse the range part: either "max" or "min-max"
-		let (min, max) = if let Some((min_str, max_str)) = range_part.split_once('-') {
+		let (min, max) = if let Some((min_str, max_str)) = range_part.split_once('-')
+		{
 			let min = parse_usize(min_str.trim(), "min")?;
 			let max = parse_usize(max_str.trim(), "max")?;
 			(min, max)
@@ -70,8 +71,9 @@ impl TokenRange {
 // region:    --- Support
 
 fn parse_usize(s: &str, field_name: &str) -> Result<usize> {
-	s.parse::<usize>()
-		.map_err(|_| Error::InvalidTokenRange(format!("Invalid {field_name} value: '{s}'")))
+	s.parse::<usize>().map_err(|_| {
+		Error::InvalidTokenRange(format!("Invalid {field_name} value: '{s}'"))
+	})
 }
 
 // endregion: --- Support

@@ -98,9 +98,9 @@ Token 范围使用 `[min-]max[:avg]` 格式指定：
 #### 生成 Bench 格式数据集
 
 ```bash
-cargo run -- \
+cargo run --release -- \
   -i demo/input_0.txt \
-  -i demo/inpu_1.txt \
+  -i demo/input_1.txt \
   -f bench \
   -o output_bench.jsonl \
   -t demo/tokenizer.json \
@@ -111,9 +111,9 @@ cargo run -- \
 #### 生成 AIAK 格式数据集
 
 ```bash
-cargo run -- \
+cargo run --release -- \
   -i demo/input_0.txt \
-  -i demo/inpu_1.txt \
+  -i demo/input_1.txt \
   -f aiak \
   -o output_aiak.json \
   -t demo/tokenizer.json \
