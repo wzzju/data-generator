@@ -57,7 +57,7 @@ src/
 
 ## Code Style & Conventions
 
-** Please be sure to strictly follow Rust's best programming practices.**
+**Please be sure to strictly follow Rust's best programming practices.**
 
 ### Region Comments
 

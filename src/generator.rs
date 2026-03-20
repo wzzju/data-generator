@@ -477,14 +477,21 @@ fn generate_single_aiak_entry(
 
 	let total_target = generate_target_tokens(token_range);
 
-	// -- Decide number of conversation rounds (1-3 pairs)
-	let max_rounds = if total_target >= 100 {
-		3
-	} else if total_target >= 40 {
-		2
-	} else {
-		1
-	};
+	// -- Decide number of conversation rounds based on target token count
+	// Table is sorted descending by threshold; first match wins.
+	const ROUND_TABLE: &[(usize, usize)] = &[
+		(64_000, 12),
+		(32_000, 10),
+		(16_000, 8),
+		(8_000, 5),
+		(4_000, 3),
+		(1_000, 2),
+	];
+	let max_rounds = ROUND_TABLE
+		.iter()
+		.find(|(threshold, _)| total_target >= *threshold)
+		.map(|(_, rounds)| *rounds)
+		.unwrap_or(1);
 	let num_rounds: usize = rng.random_range(1..=max_rounds);
 
 	// -- Distribute tokens across rounds
