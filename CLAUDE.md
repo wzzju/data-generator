@@ -43,12 +43,21 @@ src/
 
 ### Module Responsibilities
 
-- **`cmd.rs`**: Defines `CliCmd` (clap `Parser`) and `OutputFormat` enum (`Aiak`/`Bench`). All CLI args: `-i`, `-f`, `-o`, `-t`, `-r`, `-c`.
+- **`cmd.rs`**: Defines `CliCmd` (clap `Parser`) and `OutputFormat` enum (`Aiak`/`Bench`). All CLI args: `-i`, `-f`, `-o`, `-t`, `-r`, `-c`, `-j`.
 - **`error.rs`**: Single `Error` enum with `Custom`, `InvalidTokenRange`, `Io`, `SerdeJson`, `TokenizerError` variants. Uses `derive_more` (`Display`, `Error`, `From`) instead of `thiserror`/`anyhow`.
 - **`token_range.rs`**: Parses `[min-]max[:avg]` format strings into `TokenRange { min, max, avg }`.
-- **`generator.rs`**: Contains all generation logic — corpus loading, tokenizer loading, sentence boundary snapping, binary-search token extraction, normal distribution target generation, AIAK/Bench output writing.
+- **`generator.rs`**: Contains all generation logic — corpus loading (async via Tokio), tokenizer loading, sentence boundary snapping, binary-search token extraction, normal distribution target generation, AIAK/Bench output writing (async via Tokio). Entry generation is parallelized using Rayon.
+
+### Concurrency Model
+
+- **Tokio async runtime** (`#[tokio::main]`): Handles all file IO (reading corpus, writing output).
+- **Rayon parallel iterators**: Parallelize CPU-intensive entry generation (`tokenizer.encode()`, binary-search extraction). Each entry is generated independently; entries within an AIAK dataset are unordered, but multi-turn conversations within a single entry are generated sequentially to preserve turn ordering.
+- **`-j` / `--jobs`**: Controls Rayon thread pool size. Defaults to number of CPU cores via `num_cpus`.
+- **`Arc`-wrapped shared state**: `corpus_files` and `tokenizer` are wrapped in `Arc` for safe sharing across Rayon threads.
 
 ## Code Style & Conventions
+
+** Please be sure to strictly follow Rust's best programming practices.**
 
 ### Region Comments
 

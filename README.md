@@ -102,10 +102,10 @@ cargo run --release -- \
   -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f bench \
-  -o output_bench.jsonl \
+  -o output_bench_16k.jsonl \
   -t demo/tokenizer.json \
-  -r "100-300:200" \
-  -c 20
+  -r "4000-4500:4200" \
+  -c 100
 ```
 
 #### 生成 AIAK 格式数据集
@@ -115,10 +115,10 @@ cargo run --release -- \
   -i demo/input_0.txt \
   -i demo/input_1.txt \
   -f aiak \
-  -o output_aiak.json \
+  -o output_aiak_16k.json \
   -t demo/tokenizer.json \
-  -r "50-200:100" \
-  -c 15
+  -r "4000-4500:4200" \
+  -c 100
 ```
 
 #### 仅指定 max Token 数

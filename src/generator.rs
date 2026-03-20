@@ -2,16 +2,17 @@ use crate::error::{Error, Result};
 use crate::token_range::TokenRange;
 
 use rand::RngExt;
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io::{BufWriter, Write};
+use rayon::prelude::*;
+use serde::Serialize;
 use std::path::Path;
+use std::sync::Arc;
 use tokenizers::Tokenizer;
+use tokio::io::AsyncWriteExt;
 
 // region:    --- Types
 
 /// A single conversation turn in the aiak format.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct Conversation {
 	pub from: String,
 	pub value: String,
@@ -28,24 +29,24 @@ impl Conversation {
 }
 
 /// A single entry in the aiak dataset.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct AiakEntry {
 	pub id: String,
 	pub conversations: Vec<Conversation>,
 }
 
 /// A single entry in the bench dataset.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct BenchEntry {
 	pub prompt: String,
 }
 
 /// Configuration for the dataset generator.
-pub struct GeneratorConfig<'a> {
+pub struct GeneratorConfig {
 	/// Each element is the full text content of one input file.
-	pub corpus_files: &'a [String],
-	pub tokenizer: &'a Tokenizer,
-	pub token_range: &'a TokenRange,
+	pub corpus_files: Arc<Vec<String>>,
+	pub tokenizer: Arc<Tokenizer>,
+	pub token_range: TokenRange,
 	pub count: usize,
 }
 
@@ -57,7 +58,9 @@ pub struct GeneratorConfig<'a> {
 ///
 /// Each file is kept as a separate corpus entry so that during generation
 /// we can randomly pick one file per data entry.
-pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<Vec<String>> {
+///
+/// Uses Tokio async IO for file reading.
+pub async fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<Vec<String>> {
 	let mut corpus_files: Vec<String> = Vec::with_capacity(paths.len());
 
 	for path in paths {
@@ -68,7 +71,7 @@ pub fn load_corpus(paths: &[impl AsRef<Path>]) -> Result<Vec<String>> {
 				path.display()
 			)));
 		}
-		let content = fs::read_to_string(path)?;
+		let content = tokio::fs::read_to_string(path).await?;
 		if content.trim().is_empty() {
 			eprintln!("Warning: input file is empty, skipping: {}", path.display());
 			continue;
@@ -288,8 +291,6 @@ fn extract_text_pair(
 
 		// -- Extract gpt text from right after human text
 		// NOTE: gpt value starts directly after human text, no sentence snapping needed.
-		// let gpt_raw_start = start + h_char_len;
-		// let gpt_start = snap_to_sentence_start(&corpus_chars, gpt_raw_start);
 		let gpt_start = start + h_char_len;
 		if gpt_start >= corpus_len {
 			continue;
@@ -381,37 +382,44 @@ fn extract_exact_tokens(
 // region:    --- Bench Generation
 
 /// Generate a bench-format dataset (JSONL) and write to the output path.
-pub fn generate_bench(
+///
+/// Entry generation is parallelized with Rayon; file IO uses Tokio async.
+pub async fn generate_bench(
 	config: &GeneratorConfig,
 	output: impl AsRef<Path>,
 ) -> Result<()> {
-	let file = fs::File::create(output.as_ref())?;
-	let mut writer = BufWriter::new(file);
-	let mut rng = rand::rng();
+	let corpus = Arc::clone(&config.corpus_files);
+	let tok = Arc::clone(&config.tokenizer);
+	let range = config.token_range.clone();
+	let count = config.count;
 
-	for i in 0..config.count {
-		// -- Randomly pick one file for this entry
-		let corpus =
-			&config.corpus_files[rng.random_range(0..config.corpus_files.len())];
+	// -- Generate all entries in parallel using Rayon
+	let entries: Vec<Result<BenchEntry>> = (0..count)
+		.into_par_iter()
+		.map(|_| {
+			let mut rng = rand::rng();
+			let file = &corpus[rng.random_range(0..corpus.len())];
 
-		let target = generate_target_tokens(config.token_range);
-		let text = extract_text_with_tokens(
-			corpus,
-			config.tokenizer,
-			target,
-			config.token_range.min,
-			config.token_range.max,
-		)?;
+			let target = generate_target_tokens(&range);
+			let text =
+				extract_text_with_tokens(file, &tok, target, range.min, range.max)?;
 
-		let entry = BenchEntry { prompt: text };
+			Ok(BenchEntry { prompt: text })
+		})
+		.collect();
+
+	// -- Write all entries asynchronously using Tokio
+	let file = tokio::fs::File::create(output.as_ref()).await?;
+	let mut writer = tokio::io::BufWriter::new(file);
+
+	for entry_result in entries {
+		let entry = entry_result?;
 		let json = serde_json::to_string(&entry)?;
-		writer.write_all(json.as_bytes())?;
-		if i < config.count - 1 {
-			writer.write_all(b"\n")?;
-		}
+		writer.write_all(json.as_bytes()).await?;
+		writer.write_all(b"\n").await?;
 	}
 
-	writer.flush()?;
+	writer.flush().await?;
 	Ok(())
 }
 
@@ -424,101 +432,136 @@ pub fn generate_bench(
 /// Each entry has an id and a conversations array with at least one
 /// human-gpt pair. The total tokens across all turns in one entry
 /// must fall within the specified token range.
-pub fn generate_aiak(
+///
+/// Entry generation is parallelized with Rayon; file IO uses Tokio async.
+/// Multi-turn conversations within a single entry are generated sequentially
+/// to preserve ordering.
+pub async fn generate_aiak(
 	config: &GeneratorConfig,
 	output: impl AsRef<Path>,
 ) -> Result<()> {
-	let mut entries: Vec<AiakEntry> = Vec::with_capacity(config.count);
-	let mut rng = rand::rng();
+	let corpus = Arc::clone(&config.corpus_files);
+	let tok = Arc::clone(&config.tokenizer);
+	let range = config.token_range.clone();
+	let count = config.count;
 
-	for _ in 0..config.count {
-		// -- Randomly pick one file for this entry
-		let corpus =
-			&config.corpus_files[rng.random_range(0..config.corpus_files.len())];
+	// -- Generate all entries in parallel using Rayon
+	let results: Vec<Result<AiakEntry>> = (0..count)
+		.into_par_iter()
+		.map(|_| generate_single_aiak_entry(&corpus, &tok, &range))
+		.collect();
 
-		let total_target = generate_target_tokens(config.token_range);
+	// -- Collect results, propagating any errors
+	let entries: Vec<AiakEntry> = results.into_iter().collect::<Result<Vec<_>>>()?;
 
-		// -- Decide number of conversation rounds (1-3 pairs)
-		let max_rounds = if total_target >= 100 {
-			3
-		} else if total_target >= 40 {
-			2
-		} else {
-			1
-		};
-		let num_rounds: usize = rng.random_range(1..=max_rounds);
-
-		// -- Distribute tokens across rounds
-		let tokens_per_round = distribute_tokens(total_target, num_rounds);
-
-		let mut conversations: Vec<Conversation> = Vec::new();
-		let mut actual_total_tokens = 0usize;
-
-		for round_tokens in &tokens_per_round {
-			// -- Split round tokens between human (~60%) and gpt (~40%)
-			let human_tokens = (*round_tokens * 6) / 10;
-			let gpt_tokens = round_tokens - human_tokens;
-
-			let human_min = 1;
-			let human_max = config.token_range.max;
-
-			let (human_text, gpt_text) = extract_text_pair(
-				corpus,
-				config.tokenizer,
-				human_tokens.max(1),
-				gpt_tokens.max(1),
-				human_min,
-				human_max,
-			)?;
-
-			let h_tokens = count_tokens(config.tokenizer, &human_text)?;
-			let g_tokens = count_tokens(config.tokenizer, &gpt_text)?;
-			actual_total_tokens += h_tokens + g_tokens;
-
-			conversations.push(Conversation::new("human", human_text));
-			conversations.push(Conversation::new("gpt", gpt_text));
-		}
-
-		// -- Verify total tokens are within range, retry if needed
-		let entry = if actual_total_tokens >= config.token_range.min
-			&& actual_total_tokens <= config.token_range.max
-		{
-			let id = generate_id();
-			AiakEntry { id, conversations }
-		} else {
-			// -- Retry with single round for simpler control
-			let (human_text, gpt_text) = extract_text_pair(
-				corpus,
-				config.tokenizer,
-				(total_target * 6 / 10).max(1),
-				(total_target * 4 / 10).max(1),
-				1,
-				config.token_range.max,
-			)?;
-			let id = generate_id();
-			AiakEntry {
-				id,
-				conversations: vec![
-					Conversation::new("human", human_text),
-					Conversation::new("gpt", gpt_text),
-				],
-			}
-		};
-
-		entries.push(entry);
-	}
-
-	// -- Write as pretty-printed JSON array
-	let file = fs::File::create(output.as_ref())?;
-	let writer = BufWriter::new(file);
-	serde_json::to_writer_pretty(writer, &entries)?;
+	// -- Write as pretty-printed JSON array asynchronously using Tokio
+	let json_bytes = serde_json::to_vec_pretty(&entries)?;
+	tokio::fs::write(output.as_ref(), &json_bytes).await?;
 
 	Ok(())
+}
+
+/// Generate a single AIAK entry (called from Rayon parallel iterator).
+///
+/// Multi-turn conversations are generated sequentially within each entry
+/// to preserve turn ordering.
+fn generate_single_aiak_entry(
+	corpus_files: &[String],
+	tokenizer: &Tokenizer,
+	token_range: &TokenRange,
+) -> Result<AiakEntry> {
+	let mut rng = rand::rng();
+
+	// -- Randomly pick one file for this entry
+	let corpus = &corpus_files[rng.random_range(0..corpus_files.len())];
+
+	let total_target = generate_target_tokens(token_range);
+
+	// -- Decide number of conversation rounds (1-3 pairs)
+	let max_rounds = if total_target >= 100 {
+		3
+	} else if total_target >= 40 {
+		2
+	} else {
+		1
+	};
+	let num_rounds: usize = rng.random_range(1..=max_rounds);
+
+	// -- Distribute tokens across rounds
+	let tokens_per_round = distribute_tokens(total_target, num_rounds);
+
+	let mut conversations: Vec<Conversation> = Vec::new();
+	let mut actual_total_tokens = 0usize;
+
+	for round_tokens in &tokens_per_round {
+		// -- Split round tokens between human (~60%) and gpt (~40%)
+		let human_tokens = (*round_tokens * 6) / 10;
+		let gpt_tokens = round_tokens - human_tokens;
+
+		let human_min = 1;
+		let human_max = token_range.max;
+
+		let (human_text, gpt_text) = extract_text_pair(
+			corpus,
+			tokenizer,
+			human_tokens.max(1),
+			gpt_tokens.max(1),
+			human_min,
+			human_max,
+		)?;
+
+		let h_tokens = count_tokens(tokenizer, &human_text)?;
+		let g_tokens = count_tokens(tokenizer, &gpt_text)?;
+		actual_total_tokens += h_tokens + g_tokens;
+
+		conversations.push(Conversation::new("human", human_text));
+		conversations.push(Conversation::new("gpt", gpt_text));
+	}
+
+	// -- Verify total tokens are within range, retry if needed
+	if actual_total_tokens >= token_range.min
+		&& actual_total_tokens <= token_range.max
+	{
+		let id = generate_id();
+		Ok(AiakEntry { id, conversations })
+	} else {
+		// -- Retry with single round for simpler control
+		let (human_text, gpt_text) = extract_text_pair(
+			corpus,
+			tokenizer,
+			(total_target * 6 / 10).max(1),
+			(total_target * 4 / 10).max(1),
+			1,
+			token_range.max,
+		)?;
+		let id = generate_id();
+		Ok(AiakEntry {
+			id,
+			conversations: vec![
+				Conversation::new("human", human_text),
+				Conversation::new("gpt", gpt_text),
+			],
+		})
+	}
 }
 
 // endregion: --- Aiak Generation
 
 // region:    --- Support
+
+/// Initialize the Rayon global thread pool with the specified number of threads.
+///
+/// If `jobs` is `None`, defaults to the number of available CPU cores.
+pub fn init_thread_pool(jobs: Option<usize>) -> Result<()> {
+	let num_threads = jobs.unwrap_or_else(num_cpus::get);
+	rayon::ThreadPoolBuilder::new()
+		.num_threads(num_threads)
+		.build_global()
+		.map_err(|e| {
+			Error::custom(format!("Failed to build Rayon thread pool: {e}"))
+		})?;
+	Ok(())
+}
 
 /// Generate a target token count based on the token range,
 /// using a normal-like distribution centered around avg.

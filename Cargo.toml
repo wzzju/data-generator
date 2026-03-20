@@ -17,6 +17,11 @@ serde_json = "1"
 tokenizers = { version = "0.22.2", features = ["http"] }
 # -- Random
 rand = "0.10.0"
+# -- Async
+tokio = { version = "1", features = ["full"] }
+# -- Parallel
+rayon = "1.10"
+num_cpus = "1.16"
 # -- Others
 derive_more = { version = "2", features = ["from", "display", "error"] }
 uuid = { version = "1", features = ["v4"] }

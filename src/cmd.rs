@@ -38,6 +38,12 @@ pub struct CliCmd {
 	/// Number of dataset entries to generate (default: 10)
 	#[arg(short, long, default_value_t = 10)]
 	pub count: usize,
+
+	/// Number of parallel jobs (default: number of CPU cores).
+	///
+	/// Controls Rayon thread pool size for parallel entry generation.
+	#[arg(short, long)]
+	pub jobs: Option<usize>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
