@@ -1,0 +1,23 @@
+# Rust build artifacts
+/target/
+debug/
+*.pdb
+
+# Cargo
+# Keep Cargo.lock for binary projects
+# Cargo.lock  
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Generated output files
+*.generated.json
+*.generated.jsonl
+
+# OS files
+Thumbs.db

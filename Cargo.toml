@@ -1,0 +1,22 @@
+[package]
+name = "data-generator"
+version = "0.1.0"
+edition = "2024"
+
+[lints.rust]
+unsafe_code = "forbid"
+# unused = { level = "allow", priority = -1 } # For exploratory dev.
+
+[dependencies]
+# -- Cli
+clap = { version = "4", features = ["derive"] }
+# -- Json
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# -- Tokenizer
+tokenizers = { version = "0.21", features = ["http"] }
+# -- Random
+rand = "0.9"
+# -- Others
+derive_more = { version = "2", features = ["from", "display"] }
+uuid = { version = "1", features = ["v4"] }

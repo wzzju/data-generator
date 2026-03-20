@@ -1,0 +1,28 @@
+[
+  {
+    "id": "i6IyJda_0",
+    "conversations": [
+      {
+        "from": "human",
+        "value": "How to tell if a customer segment is well segmented? In 3 bullet points."
+      },
+      {
+        "from": "gpt",
+        "value": "1. Homogeneity: The segment should consist of customers who share similar characteristics and behaviors.\n2. Distinctiveness: The segment should be different from other segments in terms of their characteristics and behaviors.\n3. Stability: The segment should remain relatively stable over time and not change drastically. The characteristics and behaviors of customers within the segment should not change significantly."
+      }
+    ]
+  },
+  {
+    "id": "Da9D8J4_0",
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Why are anti viral drugs only used for life threatening viruses?"
+      },
+      {
+        "from": "gpt",
+        "value": "Antiviral drugs are not only used for life-threatening viruses. They can be used to treat a wide range of viral infections, including both mild and severe ones. The decision to use antiviral drugs typically depends on the specific virus, the severity of the infection, and the patient's overall health."
+      }
+    ]
+  }
+]
