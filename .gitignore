@@ -1,6 +1,6 @@
 # Rust build artifacts
 /target/
-debug/
+**/*.rs.bk
 *.pdb
 
 # Cargo
@@ -10,6 +10,8 @@ debug/
 # IDE / Editor
 .idea/
 .vscode/
+.trae/
+.codebuddy/
 *.swp
 *.swo
 *~
@@ -21,3 +23,7 @@ debug/
 
 # OS files
 Thumbs.db
+
+# Other
+demo/
+*.log
