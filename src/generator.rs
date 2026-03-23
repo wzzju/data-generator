@@ -383,7 +383,9 @@ fn extract_exact_tokens(
 
 /// Generate a bench-format dataset (JSONL) and write to the output path.
 ///
-/// Entry generation is parallelized with Rayon; file IO uses Tokio async.
+/// Entry generation is parallelized with Rayon inside a blocking task;
+/// file IO uses Tokio async. The `spawn_blocking` boundary ensures that
+/// Rayon's CPU-bound work does not block the Tokio async worker threads.
 pub async fn generate_bench(
 	config: &GeneratorConfig,
 	output: impl AsRef<Path>,
@@ -393,20 +395,25 @@ pub async fn generate_bench(
 	let range = config.token_range.clone();
 	let count = config.count;
 
-	// -- Generate all entries in parallel using Rayon
-	let entries: Vec<Result<BenchEntry>> = (0..count)
-		.into_par_iter()
-		.map(|_| {
-			let mut rng = rand::rng();
-			let file = &corpus[rng.random_range(0..corpus.len())];
+	// -- Generate all entries in parallel using Rayon (inside spawn_blocking
+	//    to avoid blocking the Tokio async runtime)
+	let entries: Vec<Result<BenchEntry>> = tokio::task::spawn_blocking(move || {
+		(0..count)
+			.into_par_iter()
+			.map(|_| {
+				let mut rng = rand::rng();
+				let file = &corpus[rng.random_range(0..corpus.len())];
 
-			let target = generate_target_tokens(&range);
-			let text =
-				extract_text_with_tokens(file, &tok, target, range.min, range.max)?;
+				let target = generate_target_tokens(&range);
+				let text =
+					extract_text_with_tokens(file, &tok, target, range.min, range.max)?;
 
-			Ok(BenchEntry { prompt: text })
-		})
-		.collect();
+				Ok(BenchEntry { prompt: text })
+			})
+			.collect()
+	})
+	.await
+	.map_err(|e| Error::custom(format!("Task join error: {e}")))?;
 
 	// -- Write all entries asynchronously using Tokio
 	let file = tokio::fs::File::create(output.as_ref()).await?;
@@ -433,7 +440,9 @@ pub async fn generate_bench(
 /// human-gpt pair. The total tokens across all turns in one entry
 /// must fall within the specified token range.
 ///
-/// Entry generation is parallelized with Rayon; file IO uses Tokio async.
+/// Entry generation is parallelized with Rayon inside a blocking task;
+/// file IO uses Tokio async. The `spawn_blocking` boundary ensures that
+/// Rayon's CPU-bound work does not block the Tokio async worker threads.
 /// Multi-turn conversations within a single entry are generated sequentially
 /// to preserve ordering.
 pub async fn generate_aiak(
@@ -445,11 +454,16 @@ pub async fn generate_aiak(
 	let range = config.token_range.clone();
 	let count = config.count;
 
-	// -- Generate all entries in parallel using Rayon
-	let results: Vec<Result<AiakEntry>> = (0..count)
-		.into_par_iter()
-		.map(|_| generate_single_aiak_entry(&corpus, &tok, &range))
-		.collect();
+	// -- Generate all entries in parallel using Rayon (inside spawn_blocking
+	//    to avoid blocking the Tokio async runtime)
+	let results: Vec<Result<AiakEntry>> = tokio::task::spawn_blocking(move || {
+		(0..count)
+			.into_par_iter()
+			.map(|_| generate_single_aiak_entry(&corpus, &tok, &range))
+			.collect()
+	})
+	.await
+	.map_err(|e| Error::custom(format!("Task join error: {e}")))?;
 
 	// -- Collect results, propagating any errors
 	let entries: Vec<AiakEntry> = results.into_iter().collect::<Result<Vec<_>>>()?;
