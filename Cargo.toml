@@ -18,7 +18,12 @@ tokenizers = { version = "0.22.2", features = ["http"] }
 # -- Random
 rand = "0.10.0"
 # -- Async
-tokio = { version = "1", features = ["full"] }
+# tokio = { version = "1", features = ["full"] }
+# rt-multi-thread: multi-threaded runtime + spawn_blocking
+# macros:          #[tokio::main] proc macro
+# fs:              async file operations (tokio::fs::*)
+# io-util:         async IO helpers (AsyncWriteExt, BufWriter)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
 # -- Parallel
 rayon = "1.10"
 num_cpus = "1.16"
