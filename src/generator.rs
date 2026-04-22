@@ -232,9 +232,22 @@ fn extract_text_with_tokens(
 		}
 	}
 
-	// -- Fallback: just take a raw chunk
+	// -- Fallback: use binary search at a random position to get as
+	//    close to the target as possible (never exceeds max_tokens).
 	let raw_start = rng.random_range(0..corpus_len.max(1));
 	let start = snap_to_sentence_start(&corpus_chars, raw_start);
+	if let Some((text, _)) = extract_exact_tokens(
+		&corpus_chars,
+		start,
+		tokenizer,
+		target_tokens,
+		1, // relax min for fallback so we always get a result
+		max_tokens,
+	)? {
+		return Ok(text);
+	}
+
+	// -- Absolute fallback: raw chunk (should be extremely rare)
 	let end = (start + estimated_chars).min(corpus_len);
 	Ok(corpus_chars[start..end].iter().collect())
 }
@@ -243,6 +256,11 @@ fn extract_text_with_tokens(
 ///
 /// The human text starts at a random position, and the gpt text is
 /// taken from immediately after the human text in the corpus.
+///
+/// `gpt_tokens` is the *desired* gpt token count.  The actual target
+/// used for the gpt half can be overridden by the caller via
+/// `gpt_exact_target` to compensate for drift accumulated in earlier
+/// turns (see [`generate_single_aiak_entry`]).
 fn extract_text_pair(
 	corpus: &str,
 	tokenizer: &Tokenizer,
@@ -250,6 +268,7 @@ fn extract_text_pair(
 	gpt_tokens: usize,
 	min_tokens: usize,
 	max_tokens: usize,
+	gpt_exact_target: Option<usize>,
 ) -> Result<(String, String)> {
 	let corpus_chars: Vec<char> = corpus.chars().collect();
 	let corpus_len = corpus_chars.len();
@@ -260,6 +279,8 @@ fn extract_text_pair(
 	let estimated_human_chars = human_tokens * 2;
 	let estimated_gpt_chars = gpt_tokens * 2;
 	let total_estimated = estimated_human_chars + estimated_gpt_chars;
+
+	let effective_gpt_target = gpt_exact_target.unwrap_or(gpt_tokens);
 
 	for _ in 0..100 {
 		let max_start = corpus_len.saturating_sub(total_estimated);
@@ -300,7 +321,7 @@ fn extract_text_pair(
 			&corpus_chars,
 			gpt_start,
 			tokenizer,
-			gpt_tokens,
+			effective_gpt_target,
 			1, // gpt has no strict min requirement per turn
 			max_tokens,
 		)?;
@@ -318,12 +339,19 @@ fn extract_text_pair(
 		min_tokens,
 		max_tokens,
 	)?;
-	let g = extract_text_with_tokens(corpus, tokenizer, gpt_tokens, 1, max_tokens)?;
+	let g = extract_text_with_tokens(corpus, tokenizer, effective_gpt_target, 1, max_tokens)?;
 	Ok((h, g))
 }
 
 /// Try to extract text from corpus_chars starting at `start` with
 /// approximately `target_tokens`. Returns (text, char_length) if successful.
+///
+/// The binary search looks for text whose token count falls within
+/// `[min_tokens, max_tokens]`. When that range is very tight (or even
+/// a single value like min == max), the exact token count may be
+/// unreachable because adding one character can jump over multiple
+/// tokens. In that case we keep the **closest** candidate that does
+/// not exceed `max_tokens` so the caller always gets a usable result.
 fn extract_exact_tokens(
 	corpus_chars: &[char],
 	start: usize,
@@ -341,7 +369,11 @@ fn extract_exact_tokens(
 	let mut low = 0usize;
 	let mut high = available;
 
+	// best candidate that satisfies [min_tokens, max_tokens]
 	let mut best: Option<(String, usize, usize)> = None; // (text, char_len, diff)
+	// fallback: closest candidate that does not exceed max_tokens
+	// (used when no candidate lands exactly in the strict range)
+	let mut closest: Option<(String, usize, usize)> = None; // (text, char_len, diff)
 
 	for _ in 0..30 {
 		if low > high {
@@ -357,13 +389,23 @@ fn extract_exact_tokens(
 		let token_count = count_tokens(tokenizer, &text)?;
 
 		if token_count >= min_tokens && token_count <= max_tokens {
+			// Perfect: within the requested range
 			let diff = token_count.abs_diff(target_tokens);
 			let is_better = best.as_ref().is_none_or(|(_, _, bd)| diff < *bd);
 			if is_better {
 				best = Some((text, mid, diff));
 			}
-			if diff <= target_tokens / 10 + 1 {
+			// Early exit: exact hit, or "close enough" when the range is wide
+			if diff == 0 || (min_tokens < max_tokens && diff <= target_tokens / 10 + 1)
+			{
 				break;
+			}
+		} else if token_count <= max_tokens {
+			// Below min but does not exceed max – track as fallback
+			let diff = token_count.abs_diff(target_tokens);
+			let is_better = closest.as_ref().is_none_or(|(_, _, bd)| diff < *bd);
+			if is_better {
+				closest = Some((text, mid, diff));
 			}
 		}
 
@@ -374,7 +416,9 @@ fn extract_exact_tokens(
 		}
 	}
 
-	Ok(best.map(|(text, char_len, _)| (text, char_len)))
+	// Prefer the strict match; fall back to the closest-under-max candidate
+	let result = best.or(closest);
+	Ok(result.map(|(text, char_len, _)| (text, char_len)))
 }
 
 // endregion: --- Text Extraction
@@ -478,7 +522,9 @@ pub async fn generate_aiak(
 /// Generate a single AIAK entry (called from Rayon parallel iterator).
 ///
 /// Multi-turn conversations are generated sequentially within each entry
-/// to preserve turn ordering.
+/// to preserve turn ordering. The last turn's gpt portion is adjusted
+/// to compensate for accumulated drift so the total token count lands
+/// as close to `total_target` as possible.
 fn generate_single_aiak_entry(
 	corpus_files: &[String],
 	tokenizer: &Tokenizer,
@@ -513,23 +559,50 @@ fn generate_single_aiak_entry(
 
 	let mut conversations: Vec<Conversation> = Vec::new();
 	let mut actual_total_tokens = 0usize;
+	let last_round_idx = tokens_per_round.len() - 1;
 
-	for round_tokens in &tokens_per_round {
+	for (round_idx, round_tokens) in tokens_per_round.iter().enumerate() {
 		// -- Split round tokens between human (~60%) and gpt (~40%)
 		let human_tokens = (*round_tokens * 6) / 10;
 		let gpt_tokens = round_tokens - human_tokens;
 
-		let human_min = 1;
-		let human_max = token_range.max;
+		let is_last_round = round_idx == last_round_idx;
 
-		let (human_text, gpt_text) = extract_text_pair(
-			corpus,
-			tokenizer,
-			human_tokens.max(1),
-			gpt_tokens.max(1),
-			human_min,
-			human_max,
-		)?;
+		let (human_text, gpt_text) = if is_last_round {
+			// -- Last round: extract human first, then compensate gpt
+			let h_text = extract_text_with_tokens(
+				corpus,
+				tokenizer,
+				human_tokens.max(1),
+				1,
+				token_range.max,
+			)?;
+			let h_tokens = count_tokens(tokenizer, &h_text)?;
+
+			let remaining = total_target.saturating_sub(actual_total_tokens + h_tokens);
+			let compensated_gpt = remaining.max(1);
+
+			// Use tight min/max so the gpt extraction lands as close
+			// to `compensated_gpt` as possible.
+			let g_text = extract_text_with_tokens(
+				corpus,
+				tokenizer,
+				compensated_gpt,
+				compensated_gpt,
+				compensated_gpt,
+			)?;
+			(h_text, g_text)
+		} else {
+			extract_text_pair(
+				corpus,
+				tokenizer,
+				human_tokens.max(1),
+				gpt_tokens.max(1),
+				1,
+				token_range.max,
+				None,
+			)?
+		};
 
 		let h_tokens = count_tokens(tokenizer, &human_text)?;
 		let g_tokens = count_tokens(tokenizer, &gpt_text)?;
@@ -539,31 +612,8 @@ fn generate_single_aiak_entry(
 		conversations.push(Conversation::new("gpt", gpt_text));
 	}
 
-	// -- Verify total tokens are within range, retry if needed
-	if actual_total_tokens >= token_range.min
-		&& actual_total_tokens <= token_range.max
-	{
-		let id = generate_id();
-		Ok(AiakEntry { id, conversations })
-	} else {
-		// -- Retry with single round for simpler control
-		let (human_text, gpt_text) = extract_text_pair(
-			corpus,
-			tokenizer,
-			(total_target * 6 / 10).max(1),
-			(total_target * 4 / 10).max(1),
-			1,
-			token_range.max,
-		)?;
-		let id = generate_id();
-		Ok(AiakEntry {
-			id,
-			conversations: vec![
-				Conversation::new("human", human_text),
-				Conversation::new("gpt", gpt_text),
-			],
-		})
-	}
+	let id = generate_id();
+	Ok(AiakEntry { id, conversations })
 }
 
 // endregion: --- Aiak Generation
